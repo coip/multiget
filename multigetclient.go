@@ -15,69 +15,81 @@ import (
    "os"
    "io"
    "net/http"
+   "flag"
 )
 
+
+//simple error wrapper from gobyexample
 func check(e error) {
    if e != nil { panic(e) }
 }
 
 func downloadChunk(resourceUrl string, chunk int, chunksize int, file *os.File) {
-   fmt.Println("----------------------------\n--\nrequesting chunk ", chunk, " on ", resourceUrl, "\n-------------------------")
+      //fmt.Println("--\nrequesting chunk ", chunk, " on ", resourceUrl, "\n--")
 
-      //construct header for range, specify (unit, star, end)
+      //construct header for range, specify (unit, start, end)
       headerval := fmt.Sprintf("%s=%d-%d", "bytes", chunk*chunksize, (chunk+1)*chunksize-1)
-   fmt.Println("[Range]:[", headerval, "]")
+      //fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
       client := &http.Client{}
       req, _ := http.NewRequest("GET", resourceUrl, nil)
       req.Header.Set("Range", headerval)
 
+      //perform request
       res, _ := client.Do(req)
 
+      //seek file pointer to correct location (prep for parallel)
       file.Seek(int64(chunk*chunksize), 0)
-      bytesWritten, _ := io.Copy(file, res.Body)
+      io.Copy(file, res.Body)
+      //bytesWritten, _ := io.Copy(file, res.Body)
+      //fmt.Println("bytes written: ", bytesWritten)
 
-   fmt.Println("bytes written: ", bytesWritten)
       defer res.Body.Close()
-
-   fmt.Println("response status: ", res.Status);
-//      check(err);
+      //fmt.Println("response status: ", res.Status);
+      //check(err);
 }
 
 func main() {
 
-//resource url to download
-   var resourceUrl string = os.Args[1]
-   
-//filename
-   var filename string = os.Args[2]
 
-//size of chunk, mebibyte. sticking with a KB for testing w images
-   chunksize := 1024//*1024
-   
-//chunks to download
-   chunks := 4
+   //establish defaults for cli args
+   filenamePtr    := flag.String("filename", "download", "filename to save download to")
+   chunksizePtr   := flag.Int("chunksize", 1024*1024, "chunk size in bytes")
+   chunksPtr      := flag.Int("chunks", 4, "how many chunks")
+   wholePtr := flag.Bool("whole", false, "download all or just the chunks specified")
 
-//rudimentary check for url presence. might want to validate w ~
-   if len(resourceUrl) == 0 {
+   //parse flags, more importantly: populate flag.Args for url
+   flag.Parse()
+
+   //rudimentary check for url presence. might want to validate w ~
+   if len(flag.Args()) == 0 {
       fmt.Println("specify resource url for download\nie - ./multigetclient url");
       return;
    }
 
-   out, _ := os.Create(filename)
+   //resource url to download, could support list simply enough
+   var resourceUrl string = flag.Args()[0]
+
+   //create local file to save downloaded contents into
+   out, _ := os.Create(*filenamePtr)
    defer out.Close()
 
-//get the chunks
-   for chunk := 0; chunk < chunks; chunk++ {
-      downloadChunk(resourceUrl, chunk, chunksize, out)
-      //go downloadChunk(resourceUrl, chunk, chunksize, out)
+   //get the chunks
+   for chunk := 0; chunk < *chunksPtr; chunk++ {
+      downloadChunk(resourceUrl, chunk, *chunksizePtr, out)
+      //go downloadChunk(resourceUrl, chunk, *chunksizePtr, out)
    }
-   fmt.Println("downloaded ", chunks, " chunks, each ", chunksize, " bytes. finishing...");
 
 
-   headerval := fmt.Sprintf("%s=%d-", "bytes", (chunks)*chunksize)
-   fmt.Println("[Range]:[", headerval, "]")
+   //for testing/general usability ive added a final request to get remainder of data/payload
+   fmt.Println("downloaded ", *chunksPtr, " chunks, each ", *chunksizePtr, " bytes.")
+
+   if *wholePtr {
+      fmt.Println("finishing...")
+
+      headerval := fmt.Sprintf("%s=%d-", "bytes", (*chunksPtr)*(*chunksizePtr))
+      fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
       client := &http.Client{}
@@ -90,9 +102,9 @@ func main() {
       //out.Seek(int64(chunks*chunksize),0)
       bytesWritten, _ := io.Copy(out, res.Body)
 
-   fmt.Println("bytes written: ", bytesWritten)
+      fmt.Println("bytes written: ", bytesWritten)
       defer res.Body.Close()
-
-   fmt.Println("response status: ", res.Status);
-
+   
+      fmt.Println("response status: ", res.Status);
+   }
 }
