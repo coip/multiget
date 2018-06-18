@@ -13,7 +13,9 @@ package main
 //    seems to work for sub-mebibyte files, ie https://www.gutenberg.org/files/57328/57328-0.txt
 //    & stat reports  of a 20MB payload
 
+///
 //    Written by Ethan Coyle -- coip.me
+///
 
 import (
    "fmt"
@@ -22,6 +24,7 @@ import (
    "net/http"
    "flag"
    "sync"
+   "strconv"
 )
 
 var wg sync.WaitGroup
@@ -63,9 +66,9 @@ func main() {
 
    //establish defaults for cli args
    filenamePtr    := flag.String("filename", "download", "filename to save download to")
-   chunksizePtr   := flag.Int("chunksize", 1024*1024, "chunk size in bytes")
-   chunksPtr      := flag.Int("chunks", 4, "how many chunks")
-   wholePtr       := flag.Bool("whole", false, "true ? download all : just the chunks specified")
+   chunksizePtr   := flag.Int("chunksize", 8192, "chunk size in bytes") //1024*1024 = Mebibyte; 
+   //chunksPtr      := flag.Int("chunks", 4, "how many chunks")           //deprecated, now determined by preemptive http.Head request
+   //wholePtr       := flag.Bool("whole", false, "true ? download all : just the chunks specified")
 
    //parse flags, more importantly: populate flag.Args for url
    flag.Parse()
@@ -84,36 +87,43 @@ func main() {
    defer file.Close()
 
    //we will have "*chunksPtr" many go-routines to wait for
-   wg.Add(*chunksPtr)
+   //wg.Add(*chunksPtr)
+
+   res, _ := http.Head(resourceUrl)
+   fmt.Println("response status:", res.Status)
+   //fmt.Println("resheaders: ", res.Header)
+   clen, _ := strconv.Atoi(res.Header["Content-Length"][0])
+   fmt.Println("Content-Length: ", clen)
+   fmt.Printf("%d go-routines(%d%s remainder) needed to satisfy %d%s per go-routine", clen/(*chunksizePtr), clen%(*chunksizePtr), "Bytes", *chunksizePtr, "Bytes")
+   goRoutineCount := clen/(*chunksizePtr)
+
+   //if clen%(*chunksizePtr) > 0 { goRoutineCount++ } //if leftoverfile, still have to wait
+
+   fmt.Println("waiting for ", goRoutineCount, " routines.")
+   wg.Add(goRoutineCount)
 
    //get the chunks
-   for chunk := 0; chunk < *chunksPtr; chunk++ {
+   for chunk := 0; chunk < (clen/(*chunksizePtr)); chunk++ {
       go downloadChunk(resourceUrl, chunk, *chunksizePtr)
    }
 
-   wg.Wait()
-
-   //for testing/general usability ive added a final request to get remainder of data/payload
-   if *wholePtr {
-
       fmt.Println("finishing...")
 
-      headerval := fmt.Sprintf("%s=%d-", "bytes", (*chunksPtr)*(*chunksizePtr))
+      headerval := fmt.Sprintf("%s=%d-", "bytes", clen-(clen%(*chunksizePtr)))
       fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
       req, _ := http.NewRequest("GET", resourceUrl, nil)
       req.Header.Set("Range", headerval)
 
-      res, _ := client.Do(req)
+      res, _ = client.Do(req)
 
-      file.Seek(0, 2) 
-      //file.Seek(int64(chunks*chunksize),0)
+      wg.Wait()
+      file.Seek(0,2)
       bytesWritten, _ := io.Copy(file, res.Body)
-
       fmt.Println("bytes written: ", bytesWritten)
-      defer res.Body.Close()
+      res.Body.Close()
    
       fmt.Println("response status: ", res.Status);
-   }
+   //}()
 }
