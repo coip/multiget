@@ -1,5 +1,9 @@
 package main
 
+//v3: added flags, tidied up CLI pieces. 
+//    concurrency support, firing off arbitrarily granular disjoint/non-overlapping requests for scalable parallelism.
+//    removed/cleaned-up most of the cruft in the core logic.
+
 //v2: seemingly works for 4 chunks of MiB on test jar.
 //    gutenberg apparently wasnt supporting Range (saw 200, not 206)
 //    testing seems positive w/ https://i.imgur.com/VG2UvcY.jpg
@@ -9,6 +13,7 @@ package main
 //    seems to work for sub-mebibyte files, ie https://www.gutenberg.org/files/57328/57328-0.txt
 //    & stat reports  of a 20MB payload
 
+//    Written by Ethan Coyle -- coip.me
 
 import (
    "fmt"
@@ -23,7 +28,7 @@ var wg sync.WaitGroup
 var mu sync.Mutex
 var file *os.File
 
-
+var client = &http.Client{}
 
 //simple error wrapper from gobyexample
 func check(e error) {
@@ -32,34 +37,25 @@ func check(e error) {
 
 func downloadChunk(resourceUrl string, chunk int, chunksize int) {
       defer wg.Done();
-      fmt.Println("--\nrequesting chunk ", chunk, " on ", resourceUrl, "\n--")
 
       //construct header for range, specify (unit, start, end)
       headerval := fmt.Sprintf("%s=%d-%d", "bytes", chunk*chunksize, (chunk+1)*chunksize-1)
-      fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
-      client := &http.Client{}
-      req, err := http.NewRequest("GET", resourceUrl, nil)
-      check(err)
+      req, _ := http.NewRequest("GET", resourceUrl, nil)
       req.Header.Set("Range", headerval)
 
       //perform request
-      res, err := client.Do(req)
-      check(err)
+      res, _ := client.Do(req)
 
+      //Critical section, file access surrounded by mutex.
       mu.Lock()
-      //seek file pointer to correct location (prep for parallel)
-      file.Seek(int64(chunk*chunksize), 0)
-      //io.Copy(file, res.Body)
-
-      bytesWritten, err := io.Copy(file, res.Body)
+         //seek file pointer to correct location (prep for parallel)
+         file.Seek(int64(chunk*chunksize), 0)
+         io.Copy(file, res.Body)
       mu.Unlock()
-      fmt.Println("bytes written: ", bytesWritten)
-      check(err)
-      defer res.Body.Close()
-      fmt.Println("response status: ", res.Status);
-      //check(err);
+
+      res.Body.Close()
 }
 
 func main() {
@@ -86,30 +82,26 @@ func main() {
    //create local file to save downloaded contents into
    file, _ = os.Create(*filenamePtr)
    defer file.Close()
-   //check(err)
 
    //we will have "*chunksPtr" many go-routines to wait for
    wg.Add(*chunksPtr)
 
    //get the chunks
    for chunk := 0; chunk < *chunksPtr; chunk++ {
-      //downloadChunk(resourceUrl, chunk, *chunksizePtr)
       go downloadChunk(resourceUrl, chunk, *chunksizePtr)
    }
 
-
    wg.Wait()
-   fmt.Println("downloaded ", *chunksPtr, " chunks, each ", *chunksizePtr, " bytes.")
 
    //for testing/general usability ive added a final request to get remainder of data/payload
    if *wholePtr {
+
       fmt.Println("finishing...")
 
       headerval := fmt.Sprintf("%s=%d-", "bytes", (*chunksPtr)*(*chunksizePtr))
       fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
-      client := &http.Client{}
       req, _ := http.NewRequest("GET", resourceUrl, nil)
       req.Header.Set("Range", headerval)
 
