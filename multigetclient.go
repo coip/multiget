@@ -16,37 +16,47 @@ import (
    "io"
    "net/http"
    "flag"
+   "sync"
 )
 
+var wg sync.WaitGroup
+var mu sync.Mutex
+var file *os.File
 
 //simple error wrapper from gobyexample
 func check(e error) {
    if e != nil { panic(e) }
 }
 
-func downloadChunk(resourceUrl string, chunk int, chunksize int, file *os.File) {
-      //fmt.Println("--\nrequesting chunk ", chunk, " on ", resourceUrl, "\n--")
+func downloadChunk(resourceUrl string, chunk int, chunksize int) {
+      defer wg.Done();
+      fmt.Println("--\nrequesting chunk ", chunk, " on ", resourceUrl, "\n--")
 
       //construct header for range, specify (unit, start, end)
       headerval := fmt.Sprintf("%s=%d-%d", "bytes", chunk*chunksize, (chunk+1)*chunksize-1)
-      //fmt.Println("[Range]:[", headerval, "]")
+      fmt.Println("[Range]:[", headerval, "]")
 
       //construct request
       client := &http.Client{}
-      req, _ := http.NewRequest("GET", resourceUrl, nil)
+      req, err := http.NewRequest("GET", resourceUrl, nil)
+      check(err)
       req.Header.Set("Range", headerval)
 
       //perform request
-      res, _ := client.Do(req)
+      res, err := client.Do(req)
+      check(err)
 
+      mu.Lock()
       //seek file pointer to correct location (prep for parallel)
       file.Seek(int64(chunk*chunksize), 0)
-      io.Copy(file, res.Body)
-      //bytesWritten, _ := io.Copy(file, res.Body)
-      //fmt.Println("bytes written: ", bytesWritten)
+      //io.Copy(file, res.Body)
 
+      bytesWritten, err := io.Copy(file, res.Body)
+      mu.Unlock()
+      fmt.Println("bytes written: ", bytesWritten)
+      check(err)
       defer res.Body.Close()
-      //fmt.Println("response status: ", res.Status);
+      fmt.Println("response status: ", res.Status);
       //check(err);
 }
 
@@ -57,7 +67,7 @@ func main() {
    filenamePtr    := flag.String("filename", "download", "filename to save download to")
    chunksizePtr   := flag.Int("chunksize", 1024*1024, "chunk size in bytes")
    chunksPtr      := flag.Int("chunks", 4, "how many chunks")
-   wholePtr := flag.Bool("whole", false, "download all or just the chunks specified")
+   wholePtr       := flag.Bool("whole", false, "true ? download all : just the chunks specified")
 
    //parse flags, more importantly: populate flag.Args for url
    flag.Parse()
@@ -72,19 +82,24 @@ func main() {
    var resourceUrl string = flag.Args()[0]
 
    //create local file to save downloaded contents into
-   out, _ := os.Create(*filenamePtr)
-   defer out.Close()
+   file, err := os.Create(*filenamePtr)
+   defer file.Close()
+   check(err)
+
+   //we will have "*chunksPtr" many go-routines to wait for
+   wg.Add(*chunksPtr)
 
    //get the chunks
    for chunk := 0; chunk < *chunksPtr; chunk++ {
-      downloadChunk(resourceUrl, chunk, *chunksizePtr, out)
-      //go downloadChunk(resourceUrl, chunk, *chunksizePtr, out)
+      //downloadChunk(resourceUrl, chunk, *chunksizePtr)
+      go downloadChunk(resourceUrl, chunk, *chunksizePtr)
    }
 
 
-   //for testing/general usability ive added a final request to get remainder of data/payload
+   wg.Wait()
    fmt.Println("downloaded ", *chunksPtr, " chunks, each ", *chunksizePtr, " bytes.")
 
+   //for testing/general usability ive added a final request to get remainder of data/payload
    if *wholePtr {
       fmt.Println("finishing...")
 
@@ -98,9 +113,9 @@ func main() {
 
       res, _ := client.Do(req)
 
-      out.Seek(0, 2) 
-      //out.Seek(int64(chunks*chunksize),0)
-      bytesWritten, _ := io.Copy(out, res.Body)
+      file.Seek(0, 2) 
+      //file.Seek(int64(chunks*chunksize),0)
+      bytesWritten, _ := io.Copy(file, res.Body)
 
       fmt.Println("bytes written: ", bytesWritten)
       defer res.Body.Close()
