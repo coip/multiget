@@ -23,6 +23,8 @@ var wg sync.WaitGroup
 var mu sync.Mutex
 var file *os.File
 
+
+
 //simple error wrapper from gobyexample
 func check(e error) {
    if e != nil { panic(e) }
@@ -82,9 +84,9 @@ func main() {
    var resourceUrl string = flag.Args()[0]
 
    //create local file to save downloaded contents into
-   file, err := os.Create(*filenamePtr)
+   file, _ = os.Create(*filenamePtr)
    defer file.Close()
-   check(err)
+   //check(err)
 
    //we will have "*chunksPtr" many go-routines to wait for
    wg.Add(*chunksPtr)
